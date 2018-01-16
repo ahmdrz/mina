@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -135,8 +136,18 @@ func (m *Mina) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	reqFilename := filepath.Join(m.CacheDir, fmt.Sprintf("%s.req", md5))
 	resFilename := filepath.Join(m.CacheDir, fmt.Sprintf("%s.res", md5))
 
+	var untilTime time.Time
+	if strings.HasPrefix(req.Header.Get(RequestOptionsHeaderName), "until") {
+		optionValue := req.Header.Get(RequestOptionsHeaderName)
+		optionValue = optionValue[6:]
+		var err error
+		untilTime, err = time.Parse(time.RFC1123, optionValue)
+		if err != nil {
+			log.Printf("bad until format, got %s", optionValue)
+		}
+	}
+
 	if isFileExist(resFilename) {
-		log.Printf("%s [HIT] %s %s", filepath.Base(resFilename)[:8], req.Method, req.URL)
 		resDump, err := ioutil.ReadFile(resFilename)
 		if err != nil {
 			log.Println(err)
@@ -150,31 +161,45 @@ func (m *Mina) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 			return
 		}
 		defer resp.Body.Close()
-		writeHeadersToWR(wr, resp, m.Headers, XHeaderValueHit)
-		writeBodyToWR(wr, resp)
-	} else {
-		log.Printf("%s [MISS] %s %s", filepath.Base(resFilename)[:8], req.Method, req.URL)
 
-		wrRecorder := httptest.NewRecorder()
-		p.ServeHTTP(wrRecorder, req)
+		writeFlag := true
 
-		resp := wrRecorder.Result()
-		defer resp.Body.Close()
-
-		writeHeadersToWR(wr, resp, m.Headers, XHeaderValueMiss)
-		writeBodyToWR(wr, resp)
-
-		if resp.StatusCode == http.StatusNotModified {
-			return
+		if untilTime.Unix() > 0 {
+			t, _ := time.Parse(time.RFC1123, resp.Header.Get("Date"))
+			if untilTime.After(t) {
+				writeFlag = false
+			}
 		}
 
-		resDump, err := httputil.DumpResponse(resp, true)
-		if err != nil {
-			log.Printf("Error: %s", err)
+		if writeFlag {
+			log.Printf("%s [HIT] %s %s", filepath.Base(resFilename)[:8], req.Method, req.URL)
+			writeHeadersToWR(wr, resp, m.Headers, XHeaderValueHit)
+			writeBodyToWR(wr, resp)
 			return
 		}
-
-		go cacheWrite(m.CacheDir, resFilename, resDump)
-		go cacheWrite(m.CacheDir, reqFilename, reqDump)
 	}
+
+	log.Printf("%s [MISS] %s %s", filepath.Base(resFilename)[:8], req.Method, req.URL)
+
+	wrRecorder := httptest.NewRecorder()
+	p.ServeHTTP(wrRecorder, req)
+
+	resp := wrRecorder.Result()
+	defer resp.Body.Close()
+
+	writeHeadersToWR(wr, resp, m.Headers, XHeaderValueMiss)
+	writeBodyToWR(wr, resp)
+
+	if resp.StatusCode == http.StatusNotModified {
+		return
+	}
+
+	resDump, err := httputil.DumpResponse(resp, true)
+	if err != nil {
+		log.Printf("Error: %s", err)
+		return
+	}
+
+	go cacheWrite(m.CacheDir, resFilename, resDump)
+	go cacheWrite(m.CacheDir, reqFilename, reqDump)
 }
