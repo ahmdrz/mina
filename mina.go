@@ -132,13 +132,17 @@ func (m *Mina) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	optionHeaderValue := req.Header.Get(RequestOptionsHeaderName)
+
+	req.Header.Del(RequestOptionsHeaderName)
+
 	md5, reqDump := requestMD5(req)
 	reqFilename := filepath.Join(m.CacheDir, fmt.Sprintf("%s.req", md5))
 	resFilename := filepath.Join(m.CacheDir, fmt.Sprintf("%s.res", md5))
 
 	var untilTime time.Time
-	if strings.HasPrefix(req.Header.Get(RequestOptionsHeaderName), "until") {
-		optionValue := req.Header.Get(RequestOptionsHeaderName)
+	if strings.HasPrefix(optionHeaderValue, "until") {
+		optionValue := optionHeaderValue
 		optionValue = optionValue[6:]
 		var err error
 		untilTime, err = time.Parse(time.RFC1123, optionValue)
